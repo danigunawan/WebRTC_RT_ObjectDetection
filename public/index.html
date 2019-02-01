@@ -1,0 +1,26 @@
+<html>
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="static/css/main.css">
+    <link rel="shortcut icon" type="image/x-icon" href="static/images/favicon.ico" />
+    <title>Real Time Object Detection</title>
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+</head>
+<body>
+    <div id = 'main'>
+        <video id="live" width="640" height="480" autoplay></video>  
+        <canvas id="canvas"></canvas>
+    </div>
+
+<script id="objDetect" src="static/scripts/constants.js" data-source="live" data-mirror="true" data-scoreThreshold="0.40"></script>
+<script src="static/scripts/setup_rtc.js"></script>
+<script src="static/scripts/init_screen.js"></script>
+<script src="static/scripts/draw_functions.js"></script>
+<script src="static/scripts/main.js"></script>
+    
+    
+
+
+</body>
+</html>
