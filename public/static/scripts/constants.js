@@ -7,14 +7,32 @@ const scoreThreshold = s.getAttribute("data-scoreThreshold") || 0.5;
 //Video element selector
 video = document.getElementById(sourceVideo);
 
+var STUN = {
+    'url': 'stun:stun.l.google.com:19302',
+};
+
+// Set Turn Server
+/*
+var TURN = {
+    url: 'url',
+    credential: 'pass'
+};
+*/
+
+var iceServers = 
+{
+    iceServers: [STUN /*, TURN*/]
+};
+
+var pc = new RTCPeerConnection(iceServers);
+
 // Video Stream Resolution and Screen Size
 var resolutions = [[640,480],[1280,720]],
     resolution = resolutions[0],
     videoHeight = resolution[1],
     videoWidth = resolution[0],
     screenHeight = screen.height,
-    screenWidth = screen.width,
-    pc = new RTCPeerConnection();
+    screenWidth = screen.width;
 
 // Data Channel Communication
 var dc = null,
@@ -51,3 +69,12 @@ var currentData = "{}",
 var TEXT_BOX_HEIGHT=0.1,
     bbTextSize=12,
     bbTextHPadding=5;
+
+// identifier for video
+var userid = null
+
+// flag detection status
+var detectionEnabled = false
+
+// List of selected objects to detect
+var selectedObjectList = null

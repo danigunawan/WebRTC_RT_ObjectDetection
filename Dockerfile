@@ -1,5 +1,4 @@
 FROM tensorflow/tensorflow:nightly-py3-jupyter
-#latest-py3
 
 # Install FFmpeg 3.2 via PPA
 RUN apt-get install -y software-properties-common
@@ -55,22 +54,22 @@ RUN curl -OL "https://github.com/protocolbuffers/protobuf/releases/download/v3.6
 # Run protoc on the object detection repo
 RUN cd /tensorflow/models/research && \
 	protoc object_detection/protos/*.proto --python_out=.
-# 
-# # Set the PYTHONPATH to finish installing the API
+
+# Set the PYTHONPATH to finish installing the API
 ENV PYTHONPATH $PYTHONPATH:/tensorflow/models/research:/tensorflow/models/research/slim
 # 
 
-# Download Tensorflow model
+# Download Tensorflow zoo model
 RUN mkdir app
 WORKDIR /app
 
 RUN wget -nv http://download.tensorflow.org/models/object_detection/ssd_mobilenet_v1_coco_2018_01_28.tar.gz && \
 	tar xvzf ssd_mobilenet_v1_coco_2018_01_28.tar.gz
 	
-#Deploy application file
+# Deploy application file
 COPY . /app
 
-#ENTRYPOINT ["python"]
+# Start Python server
 CMD ["python","server.py","--cert-file", "ssl/domain.crt", "--key-file", "ssl/domain.key"]
 
 EXPOSE 8888 8080

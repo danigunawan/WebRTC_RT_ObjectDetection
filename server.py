@@ -1,11 +1,3 @@
-# TODO:
-# Quando faccio stopDetection deve cancellare il dato salvato in DataHolder
-#   non funziona il cleanData in stopDetection perché evidentemente dopo il processo scoda e riscrive di nuovo l'oggetto DataHolder
-# lato client quando ricevo messaggio vuoto {} devo pulire il canvas
-# lato client quando mando stopDetection deve pulire il canvas altrimenti rimane l'ultima osservazione fatta
-# gestione HTTPS
-# modifica frontend gestione push notification e non polling
-
 import argparse
 import asyncio
 import json
@@ -25,10 +17,11 @@ from PIL import Image
 import queue as queue
 import threading
 import ssl
+import uuid
+import ml_working as ml
 
 # Config
 ROOT = os.path.dirname(__file__)
-num_fetch_threads = 1
 max_size_queue = 2
 DEBUG = True
 KEY_MLCHANNEL = 'ml_channel'
@@ -37,50 +30,37 @@ default_detection_model = 'ssd_mobilenet_v1_coco' # TODO gestire meglio
 default_threshold = 0.5
 push_notification_enabled = True
 
-# Config Detection Object Variable Class
-class DetectionObjectConfigHolder():
-    def __init__(self, detection_enabled, detection_model, threshold):
-        print ('Costruttore DetectionObjectConfigHolder richiamato')
-        self.detection_enabled = detection_enabled
-        self.detection_model = detection_model
-        self.threshold = float(threshold)
-    
-    def __str__(self):
-        return 'detection_enabled: {enable}, detection_model: {detection_model},  threshold: {threshold}'.format(enable=self.detection_enabled, detection_model=self.detection_model, threshold=self.threshold )
-
-
 #Global variable
 ml_queue = queue.Queue(max_size_queue)
-pcs = set()
+pcs = dict()
 dcs = dict()
-
-# Variable manageable by client 
-detectionObjectConfigHolder = DetectionObjectConfigHolder (default_detection_enabled, default_detection_model, default_threshold)
+objectDetectionConfigs = dict()
 
 def detect_object(image_object, threshold):
     return object_detection_api.get_objects(image_object, threshold)
 
-# TODO cancellare metodo
-def detect_object_worker(q, threshold):
-    while True:
-        print(q.qsize())
-        image_object = q.get()
-        print (object_detection_api.get_objects(image_object, threshold))
-
 # Classe trasformazione track
 class VideoTransformTrack(VideoStreamTrack):
-    def __init__(self, track):
+    def __init__(self, track, identifier):
         super().__init__()  # don't forget this!
         self.counter = 0
         self.track = track
+        self.identifier = identifier
 
     async def recv(self):
         frame = await self.track.recv()
         self.counter += 1
         try:
-            if detectionObjectConfigHolder.detection_enabled:
-                image_object = frame.to_image()
-                ml_queue.put_nowait(image_object)
+            objectDetectionConfig = objectDetectionConfigs.get(self.identifier, None)
+            if objectDetectionConfig is None:
+                # Initialize Object Detection Config
+                objectDetectionConfig = object_detection_api.DetectionObjectConfigHolder (default_detection_enabled, default_detection_model, default_threshold)
+                objectDetectionConfigs[self.identifier] = objectDetectionConfig
+                print('Init objectDetectionConfig for id: ' + str(self.identifier) + ': ' + str(objectDetectionConfig))
+            
+            if objectDetectionConfig.detection_enabled:
+                mlUnitWork = ml.ML_UnitWork(ml.OBJECT_DETECTION_TASK_TYPE, frame.to_image(), objectDetectionConfig, self.identifier)
+                ml_queue.put_nowait(mlUnitWork)
             return frame
         except queue.Full:
             # Se la coda è piena non scrivo in coda
@@ -92,7 +72,7 @@ class VideoTransformTrack(VideoStreamTrack):
 class DetectionDataHolder(threading.Thread):
     def __init__(self, loop):
         """
-        Receives bounding box, class and scores data from ML Server.
+        Receives bounding box, class and scores data from ML Module.
         """
         threading.Thread.__init__(self)
         self.name = 'Detection Objects DataHandler'
@@ -109,15 +89,19 @@ class DetectionDataHolder(threading.Thread):
     def update(self, threadName):
         while not self.done:
             try:
-                if KEY_MLCHANNEL in dcs:
-                    channel = dcs[KEY_MLCHANNEL]
+                mlUnitWork = ml_queue.get()
+                # print('DetectionDataHolder Recuperato oggtto dalla coda. Task type: ' + mlUnitWork.taskType)
+                if mlUnitWork.taskType == ml.OBJECT_DETECTION_TASK_TYPE:
+                    threshold = mlUnitWork.taskConfig.threshold
+                    detection_enabled = mlUnitWork.taskConfig.detection_enabled
+                    if detection_enabled:
+                        self.data = detect_object(mlUnitWork.data, threshold)
+                        if push_notification_enabled:
+                            channel = dcs[mlUnitWork.taskIdentifier]
+                            channel.send(self.data)
+                            print('DetectionDataHolder Send to userid: ' + mlUnitWork.taskIdentifier)
                 else:
-                    channel = None
-                image_object = ml_queue.get()
-                self.data = detect_object(image_object, detectionObjectConfigHolder.threshold)
-                # Send object detection on RTC Data channel
-                if push_notification_enabled and detectionObjectConfigHolder.detection_enabled and channel is not None:
-                    channel.send(self.data)
+                    print ('ML Task type not known: ' + mlUnitWork.taskType)
             except Exception as e:
                 print("Error occured receiving data on ML client " + str(e))
 
@@ -130,75 +114,78 @@ class DetectionDataHolder(threading.Thread):
 
 detectionData = None
 
-async def getConfigVariable(request):
+async def setThreshold(request):
     try:
-        print ('### detectionObjectConfigHolder ### :  ' + str(detectionObjectConfigHolder))
-        response_obj = { 'detection_enabled' : detectionObjectConfigHolder.detection_enabled,
-                         'detection_model' : detectionObjectConfigHolder.detection_model,
-                         'threshold' : detectionObjectConfigHolder.threshold
+        params = await request.json()
+
+        uuid = params['userid'] # TODO raise exception if not present
+
+        old_threshold = objectDetectionConfigs[uuid].threshold
+        new_threshold = float(params.get('threshold', default_threshold))
+        objectDetectionConfigs[uuid].threshold = new_threshold
+
+        if DEBUG:
+            print ('************* setThreshold Config: ' + str(objectDetectionConfigs[uuid]))
+        
+        response_obj = { 'status' : 'success',
+                         'description': 'Threshold new value ({new_t}) set successfully (old value: {old_t})'.format(old_t=str(old_threshold),new_t=str(new_threshold))
                        }
         # return a success json response with status code 200 i.e. 'OK'
         return web.Response(text=json.dumps(response_obj), status=200)
     except Exception as e:
         if DEBUG:
-            print ('Error startDetection ' + str(e))
+            print ('Error setThreshold ' + str(e))
         # Bad path where name is not set
-        response_obj = { 'status' : 'failed', 'reason': str(e) }
+        response_obj = { 'status' : 'failed', 'description': str(e) }
         # return failed with a status code of 500 i.e. 'Server Error'
         return web.Response(text=json.dumps(response_obj), status=500)
 
 async def startDetection(request):
     try:
-        detectionObjectConfigHolder.detection_enabled = True
-        detectionObjectConfigHolder.detection_model = request.query.get('detection_model', default_detection_model)
-        detectionObjectConfigHolder.threshold = float(request.query.get('threshold', default_threshold))
+        params = await request.json()
+
+        uuid = params['userid'] # TODO raise exception if not present
+
+        objectDetectionConfigs[uuid].detection_enabled = True
+        objectDetectionConfigs[uuid].detection_model = params.get('detection_model', default_detection_model)
+        objectDetectionConfigs[uuid].threshold = float(params.get('threshold', default_threshold))
 
         if DEBUG:
-            print ('************* startDetection Config: ' + str(detectionObjectConfigHolder))
+            print ('************* startDetection Config: ' + str(objectDetectionConfigs[uuid]))
         
-        response_obj = { 'status' : 'success' }
+        response_obj = { 'status' : 'success',
+                        'description': 'Object Detection Enabled for peerID {peerID}'.format(peerID=uuid)
+                     }
         # return a success json response with status code 200 i.e. 'OK'
         return web.Response(text=json.dumps(response_obj), status=200)
     except Exception as e:
         if DEBUG:
             print ('Error startDetection ' + str(e))
         # Bad path where name is not set
-        response_obj = { 'status' : 'failed', 'reason': str(e) }
+        response_obj = { 'status' : 'failed', 'description': str(e) }
         # return failed with a status code of 500 i.e. 'Server Error'
         return web.Response(text=json.dumps(response_obj), status=500)
 
 async def stopDetection(request):
     try:
-        detectionObjectConfigHolder.detection_enabled = False
-        detectionData.cleanData()
+        params = await request.json()
+
+        uuid = params['userid'] # TODO raise exception if not present
+
+        objectDetectionConfigs[uuid].detection_enabled = False
 
         if DEBUG:
-            print ('************* stopDetection Config: ' + str(detectionObjectConfigHolder))
+            print ('************* stopDetection Config: ' + str(objectDetectionConfigs[uuid]))
         
-        response_obj = { 'status' : 'success' }
+        response_obj = { 'status' : 'success',
+                         'description': 'Object Detection Stopped for peerID {peerID}'.format(peerID=uuid)
+                     }
         # return a success json response with status code 200 i.e. 'OK'
         return web.Response(text=json.dumps(response_obj), status=200)
     except Exception as e:
         print ('Error stopDetection ' + str(e))
         # Bad path where name is not set
-        response_obj = { 'status' : 'failed', 'reason': str(e) }
-        # return failed with a status code of 500 i.e. 'Server Error'
-        return web.Response(text=json.dumps(response_obj), status=500)
-
-async def sendMessage(request):
-    try:
-        message = request.query.get('message', 'sendMessage')
-
-        channel = dcs[KEY_MLCHANNEL]
-        channel.send(message)
-                
-        response_obj = { 'status' : 'success' }
-        # return a success json response with status code 200 i.e. 'OK'
-        return web.Response(text=json.dumps(response_obj), status=200)
-    except Exception as e:
-        print ('Error sendMessage ' + str(e))
-        # Bad path where name is not set
-        response_obj = { 'status' : 'failed', 'reason': str(e) }
+        response_obj = { 'status' : 'failed', 'description': str(e) }
         # return failed with a status code of 500 i.e. 'Server Error'
         return web.Response(text=json.dumps(response_obj), status=500)
 
@@ -211,6 +198,8 @@ async def javascript(request):
     content = open(os.path.join(ROOT + 'public/', 'client.js'), 'r').read()
     return web.Response(content_type='application/javascript', text=content)
 
+async def generate_uuid():
+    return str(uuid.uuid4())
 
 async def offer(request):
     params = await request.json()
@@ -218,8 +207,11 @@ async def offer(request):
         sdp=params['sdp'],
         type=params['type'])
 
+    # Generate a random identifier
+    userid = await generate_uuid()
+
     pc = RTCPeerConnection()
-    pcs.add(pc)
+    pcs[userid] = pc
 
     # prepare local media
     recorder = MediaBlackhole()
@@ -227,16 +219,11 @@ async def offer(request):
     # ricezione evento datachannel (quando il peer all'altro capo effettua una createDataChannel)
     @pc.on('datachannel')
     def on_datachannel(channel):
-        dcs[KEY_MLCHANNEL] = channel
+        dcs[userid] = channel
         @channel.on('message')
         def on_message(message):
             try:
-                if isinstance(message, str) and message.startswith('getNewObjectDetection'):
-                    a = 1
-                    #channel.send(detectionData.data)
-                elif isinstance(message, str) and message.startswith('Connected'):
-                    a = 2
-                    #channel.send('Datachannel connection established!')
+                print("Received message: " + message)
             except:
                 print("Failed receiving module data.")
                 channel.send("{}")
@@ -246,14 +233,16 @@ async def offer(request):
         print('ICE connection state is %s' % pc.iceConnectionState)
         if pc.iceConnectionState == 'failed':
             await pc.close()
-            pcs.discard(pc)
+            pcs.pop(userid, None)
+            dcs.pop(userid, None)
+            objectDetectionConfigs.pop(userid, None)
 
     @pc.on('track')
     def on_track(track):
         print('Track %s received' % track.kind)
 
         if track.kind == 'video':
-            local_video = VideoTransformTrack(track)
+            local_video = VideoTransformTrack(track, userid)
             pc.addTrack(local_video)
             print("Added local video (cnn).")
 
@@ -279,15 +268,15 @@ async def offer(request):
         content_type='application/json',
         text=json.dumps({
             'sdp': pc.localDescription.sdp,
-            'type': pc.localDescription.type
+            'type': pc.localDescription.type,
+            'userid': userid
         }))
 
 async def on_shutdown(app):
     # close peer connections
-    coros = [pc.close() for pc in pcs]
+    coros = [pcs[key].close() for key in pcs]
     await asyncio.gather(*coros)
     pcs.clear()
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='WebRTC audio / video / data-channels demo')
@@ -308,13 +297,6 @@ if __name__ == '__main__':
     else:
         ssl_context = None
 
-# Set up some threads to fetch ML object detection
-    # for i in range(num_fetch_threads):
-    #     worker = Thread(target=detect_object_worker, args=(ml_queue,threshold))
-    #     worker.setDaemon(True)
-    #     worker.start()
-    #     print('Avviato thread ML Object Detection Worker')
-
     app = web.Application()
 
     app.on_shutdown.append(on_shutdown)
@@ -325,8 +307,7 @@ if __name__ == '__main__':
     app.router.add_post('/offer', offer)
     app.router.add_post('/startDetection', startDetection)
     app.router.add_post('/stopDetection', stopDetection)
-    app.router.add_get('/getConfigVariable', getConfigVariable)
-    app.router.add_post('/sendMessage', sendMessage)
+    app.router.add_post('/setThreshold', setThreshold)
     
     # static files
     app.router.add_static('/static/', ROOT + 'public/static/', name='static',show_index=True)

@@ -5,24 +5,28 @@ function drawBoxes(objects) {
     drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
 
     //filter out objects that contain a class_name and then draw boxes and labels on each
-    objects.filter(object => object.class_name).forEach(object => {
-
-        let x = object.x * drawCanvas.width;
-        let y = object.y * drawCanvas.height;
-        let width = (object.width * drawCanvas.width) - x;
-        let height = (object.height * drawCanvas.height) - y;
-
-        //flip the x axis if local video is mirrored
-        if (mirror) {
-            x = drawCanvas.width - (x + width)
-        }
-
-        drawCtx.fillText(object.class_name + " - " + Math.round(object.score * 100) + "%", x + 5, y + 20);
-        drawCtx.strokeRect(x, y, width, height);
+    objects.filter(object => object.class_name).forEach(object => {        
         
+        if (selectedObjectList == null || selectedObjectList.length == 0 || selectedObjectList.indexOf(object.class_name.toLowerCase()) > -1){
+            console.log("presente")
+        
+            let x = object.x * drawCanvas.width;
+            let y = object.y * drawCanvas.height;
+            let width = (object.width * drawCanvas.width) - x;
+            let height = (object.height * drawCanvas.height) - y;
+
+            //flip the x axis if local video is mirrored
+            if (mirror) {
+                x = drawCanvas.width - (x + width)
+            }
+
+            drawCtx.fillText(object.class_name + " - " + Math.round(object.score * 100) + "%", x + 5, y + 20);
+            drawCtx.strokeRect(x, y, width, height);
+        }
     });
 }
 
+// Not used
 function intervalWebcamFrame (){
 
     let currentData = tempData;

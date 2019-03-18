@@ -16,7 +16,6 @@ pc.addEventListener('track', function(evt) {
 });
 
 
-
 function negotiate() {
     return pc.createOffer().then(function(offer) {
         return pc.setLocalDescription(offer);
@@ -59,6 +58,9 @@ function negotiate() {
         return response.json();
     }).then(function(answer) {
         console.log("Answer SDP: " + answer.sdp);
+        console.log("Answer UUID: " + answer.userid);
+        // set identifier
+        userid = answer.userid
         return pc.setRemoteDescription(answer);
     }).catch(function(e) {
         alert(e);
@@ -80,8 +82,10 @@ function startDataChannels() {
         // Receive Data
         tempData = evt.data;
         console.log('message received: ' + tempData)
-
-        intervalWebcamFrame ()
+        
+        if (detectionEnabled) {
+            intervalWebcamFrame ()
+        }
         
         // Send request new object detection
         //var message = 'getNewObjectDetection';
